@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Connect ArConnect Wallet</title>
+    <script src="https://cdn.jsdelivr.net/npm/arconnect"></script>
+</head>
+<body>
+<h1>Connect ArConnect Wallet and Sign</h1>
+<button id="connectWallet">Connect ArConnect Wallet</button>
+<button id="signMessage" disabled>Generate signature</button>
+<p id="status"></p>
+<script>
+    let walletAddress;
+
+    // 连接 ArConnect 钱包
+    document.getElementById("connectWallet").addEventListener("click", async () => {
+        if (!window.arweaveWallet) {
+            alert("请安装 ArConnect 扩展钱包！");
+            return;
+        }
+
+        try {
+            // 请求权限
+            await window.arweaveWallet.connect(["ACCESS_ADDRESS", "SIGNATURE", "ACCESS_PUBLIC_KEY"]);
+
+            // 获取钱包地址
+            walletAddress = await window.arweaveWallet.getActiveAddress();
+            document.getElementById("status").innerText = `Wallet is connected：${walletAddress}`;
+            document.getElementById("signMessage").disabled = false;
+        } catch (err) {
+            console.error("连接钱包失败：", err);
+            alert("连接钱包失败，请重试！");
+        }
+    });
+
+    // 签名消息
+    document.getElementById("signMessage").addEventListener("click", async () => {
+        try {
+            // 从后端获取签名消息
+            const messageResponse = await fetch(`http://localhost:8081/user/getSignMessage?walletAddress=${walletAddress}`);
+            const messageResult = await messageResponse.json();
+
+            if (messageResult.code !== 200) {
+                console.log(11111111)
+                alert("获取签名消息失败，请重试！");
+                return;
+            }
+
+            const message = messageResult.data;
+
+            // 对消息进行签名
+            const encodedMessage = new TextEncoder().encode(message);
+            const signedData = await window.arweaveWallet.signature(encodedMessage, {
+                name: "RSA-PSS",
+                saltLength: 32,
+            });
+
+            // 获取 publicJWK
+            const publicKey = await window.arweaveWallet.getActivePublicKey();
+            const publicJWK = {
+                e: "AQAB",
+                ext: true,
+                kty: "RSA",
+                n: publicKey
+            };
+
+            // 将 JWK 转换为公钥
+            const rsaPublicKey = await window.crypto.subtle.importKey(
+                "jwk",
+                publicJWK,
+                { name: "RSA-PSS", hash: "SHA-256" },
+                true,
+                ["verify"]
+            );
+
+            // 导出公钥为 raw bytes
+            const exportedPublicKey = await window.crypto.subtle.exportKey("spki", rsaPublicKey);
+
+            // 将公钥字节数组转换为 Base64 字符串
+            const publicKeyBase64 = arrayBufferToBase64(exportedPublicKey);
+
+            // 将签名信息发送到后端验证
+            const requestBody = JSON.stringify({
+                address: walletAddress,
+                signature: btoa(String.fromCharCode.apply(null, new Uint8Array(signedData))),
+                publicJWK: publicKeyBase64,
+            });
+
+// 打印到控制台
+            console.log("请求 Body:", requestBody);
+            // 将签名信息发送到后端验证
+            const verifyResponse = await fetch("http://localhost:8081/user/login", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: requestBody
+            });
+
+            const verifyResult = await verifyResponse.json();
+            console.log(verifyResult)
+            if (verifyResult.code === 200) {
+                alert("Signature verification successful！，token =="+verifyResult.data);
+                document.getElementById("status").innerText = "Signature verification successful！token =="+verifyResult.data;
+            } else {
+                alert("签名验证失败：" + verifyResult.message);
+                document.getElementById("status").innerText = "签名验证失败！";
+            }
+        } catch (err) {
+            console.error("处理签名过程失败：", err);
+            alert("处理签名失败，请重试！");
+        }
+    });
+
+    // 辅助函数：将 ArrayBuffer 转换为 Base64 字符串
+    function arrayBufferToBase64(buffer) {
+        const binary = String.fromCharCode.apply(null, new Uint8Array(buffer));
+        return window.btoa(binary);
+    }
+</script>
+</body>
+</html>
